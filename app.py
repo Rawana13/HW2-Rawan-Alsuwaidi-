@@ -49,7 +49,7 @@ USER_PROMPT_TEMPLATE = "Please summarize the following meeting transcript:\n\n{t
 
 def summarize_transcript(transcript: str, prompt_version: int = 3) -> str:
     """Call the Gemini API and return the structured meeting summary."""
-    api_key = os.environ.get(AIzaSyD2ldmVZgCug8dbVsERMdZd-5rwFk9he1U)
+    api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         print("Error: GOOGLE_API_KEY environment variable is not set.", file=sys.stderr)
         print("Get a free key at https://aistudio.google.com and run:", file=sys.stderr)
