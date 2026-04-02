@@ -19,8 +19,8 @@ A Python prototype that converts raw meeting transcripts into structured summari
 ## Setup
 
 ```bash
-pip install anthropic
-export ANTHROPIC_API_KEY=your_key_here
+pip install google-generativeai
+export GOOGLE_API_KEY=your_key_from_aistudio.google.com
 ```
 
 ## Usage

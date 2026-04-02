@@ -1,13 +1,17 @@
 """
 Meeting Transcript Summarizer
 Usage: python app.py <transcript_file> [--prompt-version 1|2|3] [--output <file>]
+
+Requires: pip install google-generativeai
+API key:  export GOOGLE_API_KEY=your_key_from_aistudio.google.com
 """
 
-import anthropic
 import argparse
 import os
 import sys
 from datetime import datetime
+
+import google.generativeai as genai
 
 # ---------------------------------------------------------------------------
 # Prompt versions (configurable via --prompt-version flag)
@@ -44,26 +48,34 @@ USER_PROMPT_TEMPLATE = "Please summarize the following meeting transcript:\n\n{t
 # ---------------------------------------------------------------------------
 
 def summarize_transcript(transcript: str, prompt_version: int = 3) -> str:
-    """Call the Claude API and return the structured meeting summary."""
-    client = anthropic.Anthropic()
+    """Call the Gemini API and return the structured meeting summary."""
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        print("Error: GOOGLE_API_KEY environment variable is not set.", file=sys.stderr)
+        print("Get a free key at https://aistudio.google.com and run:", file=sys.stderr)
+        print("  export GOOGLE_API_KEY=your_key_here", file=sys.stderr)
+        sys.exit(1)
+
+    genai.configure(api_key=api_key)
 
     system = SYSTEM_PROMPTS[prompt_version]
     user_message = USER_PROMPT_TEMPLATE.format(transcript=transcript)
 
+    model = genai.GenerativeModel(
+        model_name="gemini-2.0-flash",
+        system_instruction=system,
+    )
+
     print(f"[Using prompt version {prompt_version}]")
-    print("[Calling Claude API — streaming response...]\n")
+    print("[Calling Gemini API — streaming response...]\n")
 
     result_parts = []
 
-    with client.messages.stream(
-        model="claude-opus-4-6",
-        max_tokens=2048,
-        system=system,
-        messages=[{"role": "user", "content": user_message}],
-    ) as stream:
-        for text in stream.text_stream:
-            print(text, end="", flush=True)
-            result_parts.append(text)
+    response = model.generate_content(user_message, stream=True)
+    for chunk in response:
+        text = chunk.text
+        print(text, end="", flush=True)
+        result_parts.append(text)
 
     print("\n")
     return "".join(result_parts)
@@ -74,7 +86,7 @@ def summarize_transcript(transcript: str, prompt_version: int = 3) -> str:
 # ---------------------------------------------------------------------------
 
 def save_output(summary: str, output_path: str) -> None:
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(summary)
     print(f"[Saved to {output_path}]")
@@ -85,7 +97,7 @@ def save_output(summary: str, output_path: str) -> None:
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Summarize a meeting transcript using Claude.")
+    parser = argparse.ArgumentParser(description="Summarize a meeting transcript using Gemini.")
     parser.add_argument("transcript_file", help="Path to the plain-text transcript file")
     parser.add_argument(
         "--prompt-version",
