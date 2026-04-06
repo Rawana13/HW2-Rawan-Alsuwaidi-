@@ -1,140 +1,202 @@
 """
-Meeting Transcript Summarizer
-Usage: python app.py <transcript_file> [--prompt-version 1|2|3] [--output <file>]
+Meeting Summarizer
+------------------
+Records audio from your microphone, transcribes it with Whisper,
+and summarizes it using Google Gemini.
 
-Requires: pip install google-generativeai
-API key:  export GOOGLE_API_KEY=your_key_from_aistudio.google.com
+How to run:
+    python app.py
+
+Press Enter to stop the recording.
+The summary is printed to the screen and saved to output.txt.
 """
 
-import argparse
-import os
-import sys
-from datetime import datetime
+import sounddevice as sd        # records audio from your microphone
+import soundfile as sf          # saves audio to a .wav file
+import whisper                  # converts speech to text (runs locally)
+import google.generativeai as genai  # sends text to Google Gemini
+import numpy as np              # handles the raw audio data
+import threading                # lets us record while waiting for user input
 
-import google.generativeai as genai
+# ----------------------------------------------------------------
+# CONFIGURATION — put your Gemini API key here
+# ----------------------------------------------------------------
+GEMINI_API_KEY = "AIzaSyC4cUJEz5oR0ZTCv_Aac8aZbqngSq791bI"
 
-# ---------------------------------------------------------------------------
-# Prompt versions (configurable via --prompt-version flag)
-# ---------------------------------------------------------------------------
+# Whisper model size: "tiny", "base", "small", "medium", "large"
+# "base" is a good balance of speed and accuracy for most computers
+WHISPER_MODEL = "base"
 
-SYSTEM_PROMPTS = {
-    1: (
-        "You are a helpful assistant that summarizes meeting transcripts. "
-        "Extract the key points, decisions, and action items."
-    ),
-    2: (
-        "You are an expert meeting facilitator. Given a raw meeting transcript, "
-        "produce a clean, professional summary. Be concise and factual. "
-        "Do not add information that was not discussed in the transcript."
-    ),
-    3: (
-        "You are an expert meeting facilitator and note-taker. "
-        "Given a raw meeting transcript, produce a structured summary using "
-        "exactly the sections below. Be concise and factual. "
-        "If a section has no content, write 'None identified.' "
-        "Do not invent owners, deadlines, or details not stated in the transcript.\n\n"
-        "Sections to include:\n"
-        "1. SUMMARY (2-4 sentences)\n"
-        "2. DECISIONS MADE\n"
-        "3. ACTION ITEMS (format: [Owner] - [Task] - [Deadline if stated])\n"
-        "4. OPEN QUESTIONS / FOLLOW-UPS"
-    ),
-}
+# Audio settings
+SAMPLE_RATE = 44100   # standard audio quality (44,100 samples per second)
+CHANNELS = 1          # mono audio (one microphone channel)
+AUDIO_FILE = "meeting_audio.wav"
+OUTPUT_FILE = "output.txt"
 
-USER_PROMPT_TEMPLATE = "Please summarize the following meeting transcript:\n\n{transcript}"
+# ----------------------------------------------------------------
+# THE PROMPT — this is what we send to Gemini along with the transcript
+# This is Revision 2 of the prompt (see prompts.md for full history)
+# ----------------------------------------------------------------
+SYSTEM_PROMPT = """You are a professional meeting assistant. Your job is to analyze meeting transcripts and produce clear, structured summaries for busy professionals.
 
-# ---------------------------------------------------------------------------
-# Core function
-# ---------------------------------------------------------------------------
+Given the meeting transcript below, produce output in exactly this format:
 
-def summarize_transcript(transcript: str, prompt_version: int = 3) -> str:
-    """Call the Gemini API and return the structured meeting summary."""
-    api_key = os.environ.get("GOOGLE_API_KEY")
-    if not api_key:
-        print("Error: GOOGLE_API_KEY environment variable is not set.", file=sys.stderr)
-        print("Get a free key at https://aistudio.google.com and run:", file=sys.stderr)
-        print("  export GOOGLE_API_KEY=your_key_here", file=sys.stderr)
-        sys.exit(1)
+## Meeting Summary
+Write 2-3 sentences capturing the overall purpose and outcome of the meeting.
 
-    genai.configure(api_key=api_key)
+## Key Highlights
+- List the most important points discussed (aim for 3-6 bullet points)
+- Each bullet should be one clear, specific sentence
+- Focus on decisions made, not just topics mentioned
 
-    system = SYSTEM_PROMPTS[prompt_version]
-    user_message = USER_PROMPT_TEMPLATE.format(transcript=transcript)
+## Action Items
+- [ ] [Person or Team] — [specific task] (by [deadline if mentioned, otherwise "TBD"])
+- List every commitment or next step mentioned
+- If no owner is mentioned, write "Unassigned"
 
-    model = genai.GenerativeModel(
-        model_name="gemini-2.0-flash",
-        system_instruction=system,
-    )
+## Notes for Human Review
+Flag anything that was unclear in the transcript, any names that seemed uncertain, or any action items that lacked enough detail to be actionable.
 
-    print(f"[Using prompt version {prompt_version}]")
-    print("[Calling Gemini API — streaming response...]\n")
-
-    result_parts = []
-
-    response = model.generate_content(user_message, stream=True)
-    for chunk in response:
-        text = chunk.text
-        print(text, end="", flush=True)
-        result_parts.append(text)
-
-    print("\n")
-    return "".join(result_parts)
+Be concise and professional. Do not add information that was not in the transcript."""
 
 
-# ---------------------------------------------------------------------------
-# Save output
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------
+# STEP 1: RECORD AUDIO
+# ----------------------------------------------------------------
+def record_audio():
+    """
+    Records audio from the microphone until the user presses Enter.
+    Returns the recorded audio as a numpy array.
+    """
+    print("\n" + "="*50)
+    print("  MEETING SUMMARIZER")
+    print("="*50)
+    print("\nMicrophone is ON. Start speaking...")
+    print("Press ENTER when you are done.\n")
 
-def save_output(summary: str, output_path: str) -> None:
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(summary)
-    print(f"[Saved to {output_path}]")
+    # This list will collect chunks of audio as they come in
+    audio_chunks = []
+    recording = True
+
+    def audio_callback(indata, frames, time, status):
+        # This function is called automatically every time new audio arrives
+        # indata is a small chunk of audio — we just append it to our list
+        if recording:
+            audio_chunks.append(indata.copy())
+
+    # Start recording in the background
+    with sd.InputStream(samplerate=SAMPLE_RATE, channels=CHANNELS, callback=audio_callback):
+        input()  # wait here until user presses Enter
+
+    recording = False
+    print("Recording stopped.")
+
+    # Combine all the small chunks into one long audio array
+    audio_data = np.concatenate(audio_chunks, axis=0)
+    return audio_data
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------
+# STEP 2: SAVE AUDIO TO FILE
+# ----------------------------------------------------------------
+def save_audio(audio_data):
+    """Saves the recorded audio to a .wav file so Whisper can read it."""
+    sf.write(AUDIO_FILE, audio_data, SAMPLE_RATE)
+    print(f"Audio saved to: {AUDIO_FILE}")
 
+
+# ----------------------------------------------------------------
+# STEP 3: TRANSCRIBE WITH WHISPER
+# ----------------------------------------------------------------
+def transcribe_audio():
+    """
+    Loads the Whisper model and converts the audio file to text.
+    The first time this runs it downloads the model (~140MB).
+    """
+    print(f"\nLoading Whisper model ({WHISPER_MODEL})...")
+    print("(First run will download the model — this is a one-time step)\n")
+
+    model = whisper.load_model(WHISPER_MODEL)
+
+    print("Transcribing audio... (this may take 30-60 seconds)")
+    result = model.transcribe(AUDIO_FILE)
+    transcript = result["text"].strip()
+
+    print("\nTranscript complete.")
+    print("-" * 40)
+    print(transcript)
+    print("-" * 40)
+
+    return transcript
+
+
+# ----------------------------------------------------------------
+# STEP 4: SUMMARIZE WITH GOOGLE GEMINI
+# ----------------------------------------------------------------
+def summarize_transcript(transcript):
+    """
+    Sends the transcript to Google Gemini and returns the structured summary.
+    """
+    print("\nSending transcript to Google Gemini...")
+
+    # Set up the Gemini API with your key
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel("gemini-1.5-flash")
+
+    # Build the full message: system prompt + the actual transcript
+    full_prompt = SYSTEM_PROMPT + "\n\n---\n\nMEETING TRANSCRIPT:\n" + transcript
+
+    response = model.generate_content(full_prompt)
+    summary = response.text
+
+    return summary
+
+
+# ----------------------------------------------------------------
+# STEP 5: SAVE AND DISPLAY OUTPUT
+# ----------------------------------------------------------------
+def save_output(transcript, summary):
+    """Prints the summary to the screen and saves everything to output.txt."""
+
+    output = f"""MEETING SUMMARIZER — OUTPUT
+{'='*50}
+
+{summary}
+
+{'='*50}
+RAW TRANSCRIPT
+{'='*50}
+{transcript}
+"""
+
+    # Print to screen
+    print("\n" + "="*50)
+    print("  SUMMARY")
+    print("="*50)
+    print(summary)
+
+    # Save to file
+    with open(OUTPUT_FILE, "w") as f:
+        f.write(output)
+
+    print(f"\nFull output saved to: {OUTPUT_FILE}")
+
+
+# ----------------------------------------------------------------
+# MAIN — runs all the steps in order
+# ----------------------------------------------------------------
 def main():
-    parser = argparse.ArgumentParser(description="Summarize a meeting transcript using Gemini.")
-    parser.add_argument("transcript_file", help="Path to the plain-text transcript file")
-    parser.add_argument(
-        "--prompt-version",
-        type=int,
-        choices=[1, 2, 3],
-        default=3,
-        help="Prompt version to use (1=basic, 2=improved, 3=structured). Default: 3",
-    )
-    parser.add_argument(
-        "--output",
-        default=None,
-        help="Output file path. Default: output/summary_<timestamp>.txt",
-    )
-    args = parser.parse_args()
+    if GEMINI_API_KEY == "YOUR_API_KEY_HERE":
+        print("ERROR: Please open app.py and replace YOUR_API_KEY_HERE with your actual Gemini API key.")
+        print("Get a free key at: https://aistudio.google.com")
+        return
 
-    # Read transcript
-    if not os.path.isfile(args.transcript_file):
-        print(f"Error: File not found: {args.transcript_file}", file=sys.stderr)
-        sys.exit(1)
-
-    with open(args.transcript_file, "r", encoding="utf-8") as f:
-        transcript = f.read().strip()
-
-    if not transcript:
-        print("Error: Transcript file is empty.", file=sys.stderr)
-        sys.exit(1)
-
-    # Determine output path
-    if args.output:
-        output_path = args.output
-    else:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = os.path.join("output", f"summary_{timestamp}.txt")
-
-    # Run
-    summary = summarize_transcript(transcript, prompt_version=args.prompt_version)
-    save_output(summary, output_path)
+    # Run the pipeline
+    audio_data = record_audio()
+    save_audio(audio_data)
+    transcript = transcribe_audio()
+    summary = summarize_transcript(transcript)
+    save_output(transcript, summary)
 
 
 if __name__ == "__main__":
