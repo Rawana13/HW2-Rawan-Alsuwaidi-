@@ -1,29 +1,42 @@
-# Report — Meeting Transcript Summarizer
+# Report — Meeting Summarizer
 
 ## Business Use Case
 
-Professionals spend significant time in meetings but often lack a reliable system for capturing and distributing notes afterward. This prototype automates the first-pass summarization of raw meeting transcripts, producing a structured output with a summary, decisions, action items, and open questions. The intended user is a team lead or project manager who wants to distribute meeting notes quickly without spending 15–20 minutes writing them up manually.
+Professionals spend significant time in meetings but often lack a reliable system for capturing and distributing notes afterward. This prototype automates the full pipeline: it records audio from the microphone, transcribes it locally using Whisper, and passes the transcript to Google Gemini to produce a structured summary with action items. The intended user is a team lead or project manager who wants to walk away from a meeting with notes ready — without spending 15–20 minutes writing them up manually.
+
+## Technology Stack
+
+| Component | Tool | Reason |
+|---|---|---|
+| Audio recording | `sounddevice` | Simple cross-platform microphone access |
+| Audio file I/O | `soundfile` | Saves raw audio to WAV for Whisper |
+| Transcription | OpenAI Whisper (`base` model) | Runs fully locally, no API cost, good accuracy for clear speech |
+| Summarization | Google Gemini 1.5 Flash | Fast, low-cost, follows structured output instructions reliably |
+
+Whisper runs on-device, so no audio is sent to an external service. Only the transcript text is sent to the Gemini API.
 
 ## Model Choice
 
-I used **Claude Opus 4.6** (`claude-opus-4-6`) via the Anthropic API. I chose this model because it follows complex, multi-part instructions reliably and produces coherent output even when transcripts are messy or contain conflicting information. Its strong instruction-following made it well-suited for the structured output format required in prompt version 3.
+I used **Gemini 1.5 Flash** (`gemini-1.5-flash`) via the Google Generative AI API. This model is well-suited for structured text extraction tasks: it follows multi-part formatting instructions reliably, handles messy or conversational input gracefully, and is fast enough for interactive use after a meeting ends.
 
-I did not test other models for this assignment, but based on the task characteristics (structured extraction, factuality over creativity, moderate output length), a smaller model like Claude Haiku 4.5 would likely work well for straightforward transcripts at lower cost. Opus 4.6 is appropriate for cases with ambiguity or complex multi-stakeholder meetings.
+I did not test other models for this assignment, but Gemini 1.5 Flash is a strong default for this type of task. A smaller/faster model could work for simple transcripts; a larger model (e.g., Gemini 1.5 Pro) might be worth testing on long or complex multi-stakeholder meetings.
 
 ## Baseline vs. Final Design
 
-**Baseline (Prompt v1):** A minimal system prompt asking the model to "extract key points, decisions, and action items." The output was unpredictable in structure — sometimes bullet points, sometimes prose — and action items were buried in summary text. On the vague transcript (Case 4), the model invented owners and deadlines that were not in the transcript.
+**Baseline (Prompt v1):** A minimal system prompt asking the model to "extract key points, decisions, and action items." The output was unpredictable in structure — sometimes bullet points, sometimes prose — and action items were buried in summary text. On the vague transcript (Case 4), the model invented owners and deadlines not present in the transcript.
 
-**Final (Prompt v3):** Added an explicit role, a factuality constraint ("do not invent details not stated in the transcript"), and required section headings with a specific action item format. The output became consistent across all five evaluation cases. The factuality instruction meaningfully reduced hallucination on Case 4 — the model correctly declined to invent owners. The forced structure made action items immediately scannable.
+**Final (Prompt v3):** Added an explicit role, a factuality constraint ("do not add information that was not in the transcript"), and four required Markdown sections with a checkbox-style action item format. Added a "Notes for Human Review" section that requires the model to surface uncertainty rather than silently resolve it. The output is now consistent across all five evaluation cases.
 
-The most important single improvement was adding the section format with a required action item template (`[Owner] - [Task] - [Deadline if stated]`). This prevented the model from merging action items into prose and made downstream use (e.g., pasting into a task tracker) much easier.
+The most impactful single change was the structured section format with an explicit action item template (`- [ ] [Person] — [task] (by [deadline])`). This prevented action items from being buried in prose and made the output immediately usable for follow-up.
 
 ## Where the Prototype Still Fails
 
-The system handles the five evaluation cases acceptably, but two failure modes remain. First, on transcripts with conflicting information (Case 3), the model tends to silently resolve the conflict by picking one value rather than flagging the disagreement. A reviewer who does not read the original transcript may not notice this. Second, on very vague transcripts (Case 4), while the model no longer invents owners, it sometimes generates plausible-sounding but technically empty bullet points like "discuss budget — owner TBD" when the transcript provides no real basis for even that framing. Both failures could mislead someone who trusts the output without reading the source.
+Two failure modes remain. First, on transcripts with conflicting information (Case 3), the model sometimes picks one value rather than flagging the disagreement — though the "Notes for Human Review" section now catches most of these. Second, on very vague transcripts (Case 4), the model produces technically accurate but near-empty bullet points that look structured but contain little useful information. Both failures underscore that the quality of the output is bounded by the quality of the transcript, which is in turn bounded by audio clarity and speaker behavior.
+
+A third limitation is microphone-only input. The current pipeline cannot process an existing audio file or a pre-written transcript without modifying the code.
 
 ## Deployment Recommendation
 
-I would recommend deploying this workflow **only with a mandatory human review step before distribution**. The output is a useful first draft that saves time, but it should not be sent to stakeholders automatically. The main risks are: (1) hallucinated deadlines or owners on messy transcripts, (2) silent conflict resolution that loses important information, and (3) model confidence in structuring even low-quality input, which may give reviewers false confidence in the output.
+Deploy **only with a mandatory human review step before distribution**. The output is a useful first draft that saves time, but should not be sent to stakeholders automatically. Main risks: (1) hallucinated or misattributed details on messy transcripts, (2) silent conflict resolution, and (3) low-quality audio producing an inaccurate Whisper transcript that Gemini then summarizes confidently.
 
-A reasonable deployment path: generate the summary automatically after a meeting ends, route it to the meeting organizer for a 2–3 minute review and approval, then distribute. This preserves the time savings while keeping a human accountable for accuracy.
+Recommended workflow: record and summarize immediately after the meeting → route to the meeting organizer for a 2–3 minute review → distribute. This preserves the time savings while keeping a human accountable for accuracy.
