@@ -51,3 +51,6 @@ python app.py
 | `report.md` | Analysis and findings |
 | `meeting_audio.wav` | Last recorded audio (created at runtime) |
 | `output.txt` | Last summary output (created at runtime) |
+
+##Link To Video 
+https://canva.link/1i6cihvuzrut86a
